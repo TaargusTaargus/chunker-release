@@ -1,0 +1,206 @@
+#!/usr/bin/python
+from manager import UploadManager, DownloadManager
+from storage import Storage
+from db import ChunkDB
+from auth import Credentials
+from warnings import simplefilter
+from os.path import isfile
+from sys import argv
+from multiprocessing import cpu_count
+from state import flags
+ 
+def usage(): 
+  print( '''
+               COMMANDS: 
+               chunker upload [OPTIONS...] DIR
+
+               chunker download [OPTIONS...] DIR
+
+               chunker list DB-NAME
+
+               chunker help COMMAND
+
+
+              GENERAL OPTIONS:
+
+                -s mode
+                  determines storage location: box, drive (default)
+                -m db
+                  specify the database file to write to/read from
+                -v, --verbose
+                  more verbose output from chunk
+                -t # of threads
+                  request threading with specified number of threads
+
+
+              UPLOAD ONLY OPTIONS:
+                -cf, --collapse
+                  collapse the filesystem on upload
+                -e, --encrypt
+                  enable encryption
+                -c size
+                  chunk all files within [size] byte chunks
+                -f, --force
+                  forces  reupload (might cause duplication of file contents)
+                -a, --fast
+                  fastest mode for upload (-cf -c 10000000)
+								
+     ''' )
+
+
+def upload_usage():
+  print( '''
+              Usage: chunker upload [OPTIONS...] DIR
+            
+              Command to chunk all files in a given directory
+
+              [DIR]        - directory to be chunked
+         ''' )
+
+
+def download_usage():
+  print( '''
+              Usage: chunker download [OPTIONS...] DIR
+
+              Command to unchunk all files of a given directory
+
+              [DIR]        - directory to be restored ( use '/' to restore all directories ) 
+         ''' )
+
+
+def list_usage():
+  print( '''
+              Usage: chunker list DB-NAME
+
+              Command to list all chunked contents of a database
+
+              [DB-NAME]    - location of database containing chunk meta-data 
+         ''' )
+
+
+def help_usage():
+  print( '''
+              Usage: chunker help COMMAND
+
+              Command to receive help on using a particular command
+
+              [COMMAND]   - command to be explained
+         ''' )
+
+
+
+simplefilter( "ignore" )
+argc = len( argv )
+if argc == 1:
+  usage()
+  exit( 0 )
+
+mode = argv[ 1 ]
+if mode not in [ 'download', 'upload', 'list', 'help' ]:
+  usage()
+  exit( 0 )
+
+database_name = None
+storage_mode = "drive"
+thread_count = cpu_count()
+cred_file = None
+writedir = None
+
+if '-s' in argv:
+  storage_mode = argv[ argv.index( '-s' ) + 1 ]
+  argc -= 2
+
+if '-v' in argv or '--verbose' in argv:
+  flags[ 'verbose_flag' ] = True
+  argc -= 1
+
+if '-m' in argv:
+  database_name = argv[ argv.index( '-m' ) + 1 ]
+  argc -= 2
+elif mode == 'list':
+  database_name = argv[ -1 ]
+
+if '-t' in argv:
+  thread_count = int( argv[ argv.index( '-t' ) + 1 ] )
+  argc -= 2
+
+if mode == 'upload':
+
+  if '-cf' in argv or '--collapse' in argv:
+    flags[ 'collapse_flag' ] = True
+    argc -= 1
+
+  if '-c' in argv:
+    flags[ 'chunk_size' ] = int( argv[ argv.index( '-c' ) + 1 ] )
+    argc -= 2
+  
+  if '-e' in argv or '--encrypt' in argv:
+    flags[ 'encrypt_flag' ] = True
+    argc -= 1
+
+  if '-f' in argv or '--force' in argv:
+    flags[ 'force_flag' ] = True
+    argc -= 1
+
+  if '-a' in argv or '--fast' in argv:
+		flags[ 'collapse_flag' ] = True
+		flags[ 'chunk_size' ] = 10000000
+		argc -= 1
+
+  if thread_count > cpu_count():
+    print( "WARNING: thread count higher than available cores (" + str( cpu_count() ) + "), might cause slowdown ... " )
+
+if argc < 3 and mode == 'upload':
+  upload_usage() 
+  exit()
+
+if argc < 3 and mode == 'download':
+  download_usage() 
+  exit()
+
+if argc != 3 and mode == 'list':
+  list_usage() 
+  exit()
+
+if argc != 3 and mode == 'help':
+  help_usage()
+  exit()
+
+
+if mode == 'help':
+  command = argv[ -1 ]
+  if command == 'upload':
+    upload_usage()
+  elif command == 'download':
+    download_usage()
+  elif command == 'init':
+    init_usage()
+  elif command == 'list':
+    list_usage()
+  elif command == 'help':
+    help_usage()
+  else:
+    print( 'unknown command ...' )
+  exit()
+
+elif mode == 'upload' or mode == 'download': 
+  if flags[ 'verbose_flag' ]:
+    print( 'connecting to storage service ' + storage_mode + ' ...' )
+  credentials = Credentials( cred_file )
+   
+  if flags[ 'verbose_flag' ]:
+    print( 'creating ' + mode + 'ing service ...' )
+ 
+  if mode == 'upload':
+    database_name = database_name if database_name else argv[ -1 ] + '-db'
+    uploader = UploadManager( credentials, database_name, thread_count )
+    uploader.upload( argv[ -1 ], writedir )
+  else: 
+    downloader = DownloadManager( credentials, database_name, thread_count )  
+    downloader.download( argv[ -1 ]  )
+
+#if user wants to list chunked files
+elif mode == 'list':
+  meta_db = ChunkDB( argv[ -1 ] )
+  meta_db.list_all_files() 
+
